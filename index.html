@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HEIC to JPEG Converter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- heic2any library for HEIC decoding -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.4/heic2any.min.js"></script>
+    <style>
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            transition: all 0.3s ease;
+        }
+        .drop-zone.drag-over {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        #loadingOverlay {
+            display: none;
+            backdrop-filter: blur(4px);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen flex flex-col items-center py-12 px-4">
+
+    <div class="max-w-2xl w-full bg-white rounded-2xl shadow-xl p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-slate-800 mb-2">HEIC 変換ツール</h1>
+            <p class="text-slate-500">iPhoneの写真 (HEIC) を JPEG 形式に変換します。</p>
+            <p class="text-xs text-slate-400 mt-1">※サーバーへのアップロードは行われません。ブラウザ内で安全に処理されます。</p>
+        </header>
+
+        <!-- Drop Zone -->
+        <div id="dropZone" class="drop-zone rounded-xl p-10 text-center cursor-pointer mb-6">
+            <input type="file" id="fileInput" accept=".heic" class="hidden">
+            <div id="promptContent">
+                <div class="flex justify-center mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                </div>
+                <p class="text-lg font-medium text-slate-700">HEICファイルをここにドラッグ＆ドロップ</p>
+                <p class="text-sm text-slate-400 mt-2">またはクリックしてファイルを選択</p>
+            </div>
+        </div>
+
+        <!-- Preview & Result Area -->
+        <div id="resultArea" class="hidden border-t pt-6">
+            <div class="flex flex-col items-center">
+                <h2 class="text-lg font-semibold text-slate-800 mb-4">変換完了！</h2>
+                <div class="relative group mb-6">
+                    <img id="previewImg" class="max-h-80 rounded-lg shadow-md border" alt="Converted Preview">
+                </div>
+                <div class="flex gap-4">
+                    <button id="resetBtn" class="px-6 py-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition">
+                        別の画像を変換
+                    </button>
+                    <a id="downloadLink" href="#" class="px-6 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 shadow-lg shadow-blue-200 transition">
+                        JPEGを保存
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Message Box -->
+        <div id="messageBox" class="hidden mt-4 p-3 rounded-lg text-sm text-center"></div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl flex flex-col items-center">
+            <div class="animate-spin rounded-full h-10 w-10 border-4 border-blue-500 border-t-transparent mb-4"></div>
+            <p class="text-slate-700 font-medium">変換中...</p>
+            <p class="text-xs text-slate-400 mt-2">高画質な画像ほど時間がかかります</p>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const resultArea = document.getElementById('resultArea');
+        const previewImg = document.getElementById('previewImg');
+        const downloadLink = document.getElementById('downloadLink');
+        const resetBtn = document.getElementById('resetBtn');
+        const messageBox = document.getElementById('messageBox');
+
+        // Click to trigger input
+        dropZone.addEventListener('click', () => fileInput.click());
+
+        // Drag and Drop styling
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                dropZone.classList.add('drag-over');
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('drag-over');
+            });
+        });
+
+        // Handle file selection
+        dropZone.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) handleFile(files[0]);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handleFile(e.target.files[0]);
+        });
+
+        async function handleFile(file) {
+            // Check file type (by extension as MIME type for HEIC can be inconsistent)
+            if (!file.name.toLowerCase().endsWith('.heic')) {
+                showMessage('HEICファイルを選択してください。', 'error');
+                return;
+            }
+
+            try {
+                showLoading(true);
+                hideMessage();
+
+                // Convert HEIC to JPEG blob using heic2any
+                // quality: 0.8 to balance file size and visual quality
+                const jpegBlob = await heic2any({
+                    blob: file,
+                    toType: "image/jpeg",
+                    quality: 0.8
+                });
+
+                // In case heic2any returns an array (multiple images in HEIC)
+                const resultBlob = Array.isArray(jpegBlob) ? jpegBlob[0] : jpegBlob;
+
+                // Create local URL for preview and download
+                const url = URL.createObjectURL(resultBlob);
+                
+                previewImg.src = url;
+                downloadLink.href = url;
+                downloadLink.download = file.name.replace(/\.heic$/i, '.jpg');
+
+                // UI Transition
+                dropZone.classList.add('hidden');
+                resultArea.classList.remove('hidden');
+
+            } catch (error) {
+                console.error(error);
+                showMessage('変換に失敗しました。ファイルが壊れているか、サポートされていない形式の可能性があります。', 'error');
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function showLoading(show) {
+            loadingOverlay.style.display = show ? 'flex' : 'none';
+        }
+
+        function showMessage(text, type) {
+            messageBox.textContent = text;
+            messageBox.className = `mt-4 p-3 rounded-lg text-sm text-center ${
+                type === 'error' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-green-50 text-green-600'
+            }`;
+            messageBox.classList.remove('hidden');
+        }
+
+        function hideMessage() {
+            messageBox.classList.add('hidden');
+        }
+
+        resetBtn.addEventListener('click', () => {
+            // Clean up old URLs to free memory
+            if (previewImg.src.startsWith('blob:')) {
+                URL.revokeObjectURL(previewImg.src);
+            }
+            
+            fileInput.value = '';
+            dropZone.classList.remove('hidden');
+            resultArea.classList.add('hidden');
+            hideMessage();
+        });
+    </script>
+</body>
+</html>
